@@ -1,0 +1,125 @@
+name: Deobf Bot
+
+# O zip do bot NÃO fica no repositório: ele é baixado da sua API (protegida por chave)
+# só durante a execução. Secrets necessários:
+#   DOWNLOAD_API_KEY  -> a chave da API de download
+#   DISCORD_TOKEN     -> token do bot
+#   PASTEFY_TOKEN     -> (opcional)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 */5 * * *"   # religa a cada 5h (limite de um job é 6h)
+
+concurrency:
+  group: deobf-bot
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    env:
+      LUAU_TAG: "0.739"
+      # (opcional) crie a variável DOWNLOAD_URL em Settings > Secrets and variables > Actions > Variables
+      DOWNLOAD_URL: ${{ vars.DOWNLOAD_URL || 'https://jsjsjwisjsjwjsjwjwhuwuhdhd.vercel.app/download' }}
+
+    steps:
+      - name: Conferir configuração
+        env:
+          KEY: ${{ secrets.DOWNLOAD_API_KEY }}
+          DISCORD: ${{ secrets.DISCORD_TOKEN }}
+        run: |
+          [ -n "$KEY" ]     || { echo "::error::Crie o secret DOWNLOAD_API_KEY (a chave da API de download)"; exit 1; }
+          [ -n "$DISCORD" ] || { echo "::error::Crie o secret DISCORD_TOKEN"; exit 1; }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # A chave vai no header (não na URL), então não aparece em logs de acesso
+      - name: Baixar o bot da API
+        env:
+          KEY: ${{ secrets.DOWNLOAD_API_KEY }}
+        run: |
+          set -euo pipefail
+          CODE=$(curl -sS -L --retry 4 --retry-delay 5 --retry-all-errors --max-time 600 \
+            -H "x-api-key: $KEY" -o bot.zip -w '%{http_code}' "$DOWNLOAD_URL" || true)
+          if [ "$CODE" != "200" ]; then
+            case "$CODE" in
+              401) echo "::error::API recusou a chave (401). Confira o secret DOWNLOAD_API_KEY." ;;
+              404) echo "::error::Arquivo não encontrado na API (404)." ;;
+              *)   echo "::error::Falha ao baixar o bot (HTTP $CODE)." ;;
+            esac
+            exit 1
+          fi
+          unzip -tq bot.zip >/dev/null || { echo "::error::O arquivo baixado não é um ZIP válido."; exit 1; }
+          echo "Bot baixado: $(du -h bot.zip | cut -f1)"
+
+      - name: Extrair o bot
+        run: |
+          set -euo pipefail
+          rm -rf extracted && mkdir extracted
+          unzip -q bot.zip -d extracted
+          rm -f bot.zip
+          INDEX=$(find extracted -name index.js -not -path "*/node_modules/*" -not -path "*/tools/*" -not -path "*/.git/*" | head -n 1)
+          [ -n "$INDEX" ] || { echo "::error::index.js não encontrado dentro do zip."; exit 1; }
+          echo "APP_DIR=$GITHUB_WORKSPACE/$(dirname "$INDEX")" >> "$GITHUB_ENV"
+
+      - name: Instalar dependências do bot
+        working-directory: ${{ env.APP_DIR }}
+        run: npm install --omit=dev --no-audit --no-fund >/dev/null 2>&1
+
+      - name: Cache dos binários do Luau
+        id: luau-cache
+        uses: actions/cache@v4
+        with:
+          path: luau-bin
+          key: luau-${{ env.LUAU_TAG }}-v1
+
+      - name: Compilar luau e luau-ast
+        if: steps.luau-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build g++
+          git clone -q --depth 1 --branch "$LUAU_TAG" https://github.com/luau-lang/luau.git "$RUNNER_TEMP/luau"
+          BUILD_PY=$(find "$APP_DIR/tools" -name build_luau.py | head -n 1)
+          python3 "$BUILD_PY" --src "$RUNNER_TEMP/luau" --portable >/dev/null 2>&1
+          cmake --build "$RUNNER_TEMP/luau/build-deobf" --target Luau.Ast.CLI --parallel >/dev/null 2>&1
+          mkdir -p luau-bin
+          cp "$(dirname "$BUILD_PY")/bin/luau" luau-bin/luau
+          cp "$RUNNER_TEMP/luau/build-deobf/luau-ast" luau-bin/luau-ast
+
+      - name: Instalar binários nas pastas das ferramentas
+        run: |
+          set -euo pipefail
+          for d in $(find "$APP_DIR/tools" -type d -name bin); do
+            cp luau-bin/luau luau-bin/luau-ast "$d/"
+            chmod +x "$d/luau" "$d/luau-ast"
+          done
+
+      # Logs de repositório público são visíveis a todos: o bot escreve num arquivo
+      # e só as últimas linhas (sem IDs/links) aparecem se ele cair.
+      - name: Ligar o bot
+        working-directory: ${{ env.APP_DIR }}
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          PASTEFY_TOKEN: ${{ secrets.PASTEFY_TOKEN }}
+          GITHUB_TOKEN: ""
+        run: |
+          echo "Bot iniciado em $(date -u +%H:%M) UTC"
+          if ! node index.js > "$RUNNER_TEMP/bot.log" 2>&1; then
+            echo "::warning::O bot encerrou. Últimas linhas (sem detalhes de usuários):"
+            tail -n 12 "$RUNNER_TEMP/bot.log" | sed -E 's/[0-9]{15,}/<id>/g; s/https?:\/\/[^ ]+/<url>/g' | cut -c1-200
+            exit 1
+          fi
+          

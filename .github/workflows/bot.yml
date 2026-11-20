@@ -100,6 +100,19 @@ jobs:
           cp "$(dirname "$BUILD_PY")/bin/luau" luau-bin/luau
           cp "$RUNNER_TEMP/luau/build-deobf/luau-ast" luau-bin/luau-ast
 
+      - name: Instalar .NET 8 (runtime do MoonSec)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Preparar MoonSec
+        run: |
+          set -uo pipefail
+          M="$APP_DIR/tools/external/moonsec"
+          ls "$M/dotnet/MoonsecDeobfuscator.dll" || echo "::error::MoonsecDeobfuscator.dll nao veio no zip"
+          chmod +x "$M/bin/lua5.1" || true
+          dotnet --list-runtimes
+
       - name: Instalar binários nas pastas das ferramentas
         run: |
           set -euo pipefail

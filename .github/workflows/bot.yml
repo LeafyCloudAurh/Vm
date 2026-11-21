@@ -100,17 +100,30 @@ jobs:
           cp "$(dirname "$BUILD_PY")/bin/luau" luau-bin/luau
           cp "$RUNNER_TEMP/luau/build-deobf/luau-ast" luau-bin/luau-ast
 
-      - name: Instalar .NET 8 (runtime do MoonSec)
+      - name: Instalar .NET 8 e 9 (MoonSec, 77fuscator, IronBrew 2)
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: |
+            8.0.x
+            9.0.x
 
-      - name: Preparar MoonSec
+      - name: Instalar Lune (Goofyscator)
         run: |
           set -uo pipefail
-          M="$APP_DIR/tools/external/moonsec"
-          ls "$M/dotnet/MoonsecDeobfuscator.dll" || echo "::error::MoonsecDeobfuscator.dll nao veio no zip"
-          chmod +x "$M/bin/lua5.1" || true
+          curl -fsSL -o "$RUNNER_TEMP/lune.zip" "https://github.com/lune-org/lune/releases/download/v0.10.5/lune-0.10.5-linux-x86_64.zip" \
+            && sudo unzip -q -o "$RUNNER_TEMP/lune.zip" -d /usr/local/bin \
+            && sudo chmod +x /usr/local/bin/lune && lune --version \
+            || echo "::warning::Lune nao instalou (Goofyscator ficara indisponivel)."
+
+      - name: Preparar ferramentas externas
+        run: |
+          set -uo pipefail
+          chmod +x "$APP_DIR/tools/external/moonsec/bin/lua5.1" || true
+          for f in tools/external/moonsec/dotnet/MoonsecDeobfuscator.dll \
+                   tools/external/omni/77fuscatorDeobf/deobfuscator.dll \
+                   tools/external/omni/IronBrew2Deobf/ib2bot-main/ib2deobf/LuaAnalysis.Ironbrew2.dll; do
+            [ -f "$APP_DIR/$f" ] && echo "ok $f" || echo "::error::faltando $f no zip"
+          done
           dotnet --list-runtimes
 
       - name: Instalar binários nas pastas das ferramentas

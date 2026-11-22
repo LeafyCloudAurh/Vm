@@ -115,6 +115,65 @@ jobs:
             && sudo chmod +x /usr/local/bin/lune && lune --version \
             || echo "::warning::Lune nao instalou (Goofyscator ficara indisponivel)."
 
+      - name: Cache do binário do Lumora
+        id: lumora-cache
+        uses: actions/cache@v4
+        with:
+          path: lumora-bin
+          key: lumora-v1-${{ hashFiles('**/tools/external/lumora/src/**', '**/tools/external/lumora/CMakeLists.txt', '**/tools/external/lumora/vendor/luau/**') }}
+
+      # TESTE, não é engine do bot ainda: compila o runtime nativo Lumora (C++, roda Luau de verdade
+      # fora do Roblox) e testa ele contra a amostra travada do Luraph v14.9 (mm2_obf), pra ver se o
+      # rastreamento nativo dele consegue onde o harness em Lua puro do bot não consegue.
+      # continue-on-error em tudo: se o Lumora não compilar ou travar, o bot sobe normal do mesmo jeito.
+      - name: Compilar o Lumora (teste)
+        if: steps.lumora-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build g++ libcurl4-openssl-dev libssl-dev libsodium-dev liblz4-dev
+          cmake -S "$APP_DIR/tools/external/lumora" -B "$RUNNER_TEMP/lumora-build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            && cmake --build "$RUNNER_TEMP/lumora-build" --target lumora --parallel
+          mkdir -p lumora-bin
+          if [ -f "$RUNNER_TEMP/lumora-build/bin/lumora" ]; then
+            cp "$RUNNER_TEMP/lumora-build/bin/lumora" lumora-bin/lumora
+          else
+            echo "::warning::Lumora nao compilou (o teste contra o Luraph v14.9 vai ser pulado)."
+          fi
+
+      - name: Testar o Lumora contra o Luraph v14.9 travado (mm2_obf)
+        if: always()
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if [ ! -f lumora-bin/lumora ]; then
+            echo "::warning::Binario do Lumora ausente (nao compilou), pulando o teste."
+            exit 0
+          fi
+          mkdir -p "$APP_DIR/tools/external/lumora/bin"
+          cp lumora-bin/lumora "$APP_DIR/tools/external/lumora/bin/lumora"
+          chmod +x "$APP_DIR/tools/external/lumora/bin/lumora"
+          SAMPLE="$APP_DIR/tools/external/lumora/ci-samples/mm2_obf.lua"
+          OUT="$RUNNER_TEMP/lumora-mm2.log"
+          echo "Rodando: lumora deobfuscate $SAMPLE --json --timeout 180"
+          timeout 220 "$APP_DIR/tools/external/lumora/bin/lumora" deobfuscate "$SAMPLE" --json --timeout 180 > "$OUT" 2>&1
+          CODE=$?
+          echo "$CODE" > "$RUNNER_TEMP/lumora-mm2.exitcode"
+          echo "Saida (codigo $CODE), ultimas 100 linhas:"
+          tail -n 100 "$OUT"
+
+      - name: Guardar resultado do teste do Lumora
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumora-mm2-result
+          path: |
+            ${{ runner.temp }}/lumora-mm2.log
+            ${{ runner.temp }}/lumora-mm2.exitcode
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Preparar ferramentas externas
         run: |
           set -uo pipefail

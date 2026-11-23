@@ -156,14 +156,30 @@ jobs:
           chmod +x "$APP_DIR/tools/external/lumora/bin/lumora"
           SAMPLE="$APP_DIR/tools/external/lumora/ci-samples/mm2_obf.lua"
           OUT="$RUNNER_TEMP/lumora-mm2.log"
-          # "deobfuscate" eh um comando de analise (nao o "run"), nao aceita --timeout; quem
-          # limita o tempo de parede aqui eh o "timeout 220" do shell mesmo.
-          echo "Rodando: lumora deobfuscate $SAMPLE --json"
-          timeout 220 "$APP_DIR/tools/external/lumora/bin/lumora" deobfuscate "$SAMPLE" --json > "$OUT" 2>&1
+          # "deobfuscate" eh so analise estatica (nao aceita --timeout, nao executa nada) -
+          # ja confirmamos que funciona. O teste que importa de verdade e o dinamico (run
+          # --envlogger), que executa o script na VM nativa pra ver se ela passa rapido pelo
+          # descompressor pesado onde o harness em Lua puro do bot trava.
+          echo "Rodando: lumora deobfuscate $SAMPLE --json (estatico, rapido)"
+          timeout 60 "$APP_DIR/tools/external/lumora/bin/lumora" deobfuscate "$SAMPLE" --json > "$OUT" 2>&1
           CODE=$?
           echo "$CODE" > "$RUNNER_TEMP/lumora-mm2.exitcode"
-          echo "Saida (codigo $CODE), ultimas 100 linhas:"
-          tail -n 100 "$OUT"
+          echo "Saida (codigo $CODE), ultimas 60 linhas:"
+          tail -n 60 "$OUT"
+
+          ENV_OUT="$RUNNER_TEMP/lumora-mm2.run.log"
+          ENVLOG="$RUNNER_TEMP/lumora-mm2.envlogger.jsonl"
+          echo "Rodando: lumora run $SAMPLE --envlogger --timeout 180 --json (dinamico, executa de verdade)"
+          timeout 200 "$APP_DIR/tools/external/lumora/bin/lumora" run "$SAMPLE" --envlogger --envlogger-output "$ENVLOG" --timeout 180 --json > "$ENV_OUT" 2>&1
+          RCODE=$?
+          echo "$RCODE" > "$RUNNER_TEMP/lumora-mm2.run.exitcode"
+          echo "Saida do run (codigo $RCODE), ultimas 60 linhas:"
+          tail -n 60 "$ENV_OUT"
+          if [ -f "$ENVLOG" ]; then
+            echo "envlogger.jsonl: $(wc -l < "$ENVLOG") linhas, $(wc -c < "$ENVLOG") bytes"
+          else
+            echo "(sem arquivo de envlogger)"
+          fi
 
       - name: Guardar resultado do teste do Lumora
         if: always()
@@ -173,6 +189,9 @@ jobs:
           path: |
             ${{ runner.temp }}/lumora-mm2.log
             ${{ runner.temp }}/lumora-mm2.exitcode
+            ${{ runner.temp }}/lumora-mm2.run.log
+            ${{ runner.temp }}/lumora-mm2.run.exitcode
+            ${{ runner.temp }}/lumora-mm2.envlogger.jsonl
           if-no-files-found: ignore
           retention-days: 14
 

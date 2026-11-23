@@ -156,8 +156,10 @@ jobs:
           chmod +x "$APP_DIR/tools/external/lumora/bin/lumora"
           SAMPLE="$APP_DIR/tools/external/lumora/ci-samples/mm2_obf.lua"
           OUT="$RUNNER_TEMP/lumora-mm2.log"
-          echo "Rodando: lumora deobfuscate $SAMPLE --json --timeout 180"
-          timeout 220 "$APP_DIR/tools/external/lumora/bin/lumora" deobfuscate "$SAMPLE" --json --timeout 180 > "$OUT" 2>&1
+          # "deobfuscate" eh um comando de analise (nao o "run"), nao aceita --timeout; quem
+          # limita o tempo de parede aqui eh o "timeout 220" do shell mesmo.
+          echo "Rodando: lumora deobfuscate $SAMPLE --json"
+          timeout 220 "$APP_DIR/tools/external/lumora/bin/lumora" deobfuscate "$SAMPLE" --json > "$OUT" 2>&1
           CODE=$?
           echo "$CODE" > "$RUNNER_TEMP/lumora-mm2.exitcode"
           echo "Saida (codigo $CODE), ultimas 100 linhas:"
